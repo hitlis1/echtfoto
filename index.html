@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Echt Foto controle</title>
+<meta name="description" content="Controleer of een Echt Foto echt en onbewerkt is. Alles gebeurt in je eigen browser, er wordt niets opgeslagen.">
+<script src="jsQR.js"></script>
+<style>
+:root{--bg:#0d1117;--kaart:#161c26;--lijn:#273042;--tekst:#eef2f7;--zacht:#8e9ab0;--acc:#2f7cf6;--groen:#22c55e;--geel:#f5b82e;--rood:#ef4444}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tekst);font-family:system-ui,Roboto,sans-serif}
+main{max-width:620px;margin:0 auto;padding:22px 16px 40px;display:flex;flex-direction:column;gap:14px}
+h1{margin:0;font-size:26px}h1 span{color:var(--acc)}
+.kaart{background:var(--kaart);border:1px solid var(--lijn);border-radius:16px;padding:16px}
+.oordeel{border-radius:16px;padding:16px;font-size:15px;line-height:1.5}
+.oordeel b{display:block;font-size:21px;margin-bottom:4px}
+.o-groen{background:#0f2e1c;border:2px solid var(--groen)}.o-geel{background:#33280d;border:2px solid var(--geel)}.o-rood{background:#3a1414;border:2px solid var(--rood)}.o-grijs{background:var(--kaart);border:2px solid var(--lijn)}
+table{width:100%;border-collapse:collapse;font-size:15px}
+td{padding:8px 4px;border-bottom:1px solid var(--lijn);vertical-align:top}td:first-child{color:var(--zacht);width:36%}
+.klein{font-size:13px;color:var(--zacht);line-height:1.5}
+.knop{display:block;text-align:center;border:0;border-radius:14px;padding:15px;font-size:16px;font-weight:600;color:#fff;background:var(--acc);width:100%;cursor:pointer;text-decoration:none}
+.knop.twee{background:var(--kaart);border:1px solid var(--lijn)}
+img{width:100%;border-radius:14px}
+input[type=file]{display:none}
+a{color:#7fb0ff}
+</style>
+</head>
+<body>
+<main>
+<h1>🛡️ Echt<span>Foto</span> controle</h1>
+<div id="oordeel"></div>
+<div class="kaart" id="details" style="display:none"><table id="tabel"></table></div>
+<a class="knop twee" id="kaart" target="_blank" rel="noopener" style="display:none">📍 Bekijk de plek op de kaart</a>
+<div class="kaart" id="vergelijk">
+  <b>Heb je de foto zelf?</b>
+  <p class="klein">Kies het fotobestand om te controleren of het beeld bij dit stempel hoort en of het bewerkt is. De foto wordt alleen in je eigen browser bekeken en nergens naartoe gestuurd.</p>
+  <label class="knop" for="bestand">Foto kiezen en vergelijken</label>
+  <input type="file" id="bestand" accept="image/*">
+</div>
+<div id="fotoOordeel"></div>
+<img id="foto" style="display:none">
+<p class="klein">Wat dit bewijst: de foto is gemaakt met de app Echt Foto, op het toestel met de genoemde toestelcode, op het genoemde tijdstip en de genoemde plek, en de gegevens zijn digitaal ondertekend (ECDSA P-256). Wat dit niet bewijst: dat wat op de foto staat de hele waarheid is. Positie en kompas van een telefoon zijn indicatief; de tijd is alleen onafhankelijk als er satelliettijd staat. Deze pagina slaat niets op: alle gegevens zitten in de QR code en de controle gebeurt in je eigen browser.</p>
+</main>
+<script>
+(function(){
+'use strict';
+var $=function(id){return document.getElementById(id)};
+var TE=new TextEncoder(),TD=new TextDecoder();
+var MAGIC=[0x45,0x46],SEG_ID=TE.encode('ECHTFOTO1');
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]});}
+function hex(u){return Array.from(u).map(function(b){return('0'+b.toString(16)).slice(-2)}).join('');}
+function b64(u){var s='';for(var i=0;i<u.length;i+=8192)s+=String.fromCharCode.apply(null,u.subarray(i,i+8192));return btoa(s);}
+function unb64(s){var b=atob(s),u=new Uint8Array(b.length);for(var i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return u;}
+function b64url(u){return b64(u).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
+function unb64url(s){s=s.replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';return unb64(s);}
+function qrBytes(q){var t=q.data||'';var i=t.indexOf('#');if(i>=0&&/^https?:/.test(t)){try{return unb64url(t.slice(i+1));}catch(e){return new Uint8Array(0);}}return new Uint8Array(q.binaryData);}
+function samen(d){var n=0;d.forEach(function(x){n+=x.length});var u=new Uint8Array(n),o=0;d.forEach(function(x){u.set(x,o);o+=x.length});return u;}
+function sha(u){return crypto.subtle.digest('SHA-256',u).then(function(b){return new Uint8Array(b)});}
+function gelijk(a,b){if(a.length!==b.length)return false;for(var i=0;i<a.length;i++)if(a[i]!==b[i])return false;return true;}
+function tijdTekst(ms){var d=new Date(ms);return d.toLocaleDateString('nl-NL',{day:'2-digit',month:'2-digit',year:'numeric'})+' '+d.toLocaleTimeString('nl-NL',{hour:'2-digit',minute:'2-digit',second:'2-digit'});}
+function codeVan(pub){return sha(pub).then(function(h){var x=hex(h.slice(0,4)).toUpperCase();return x.slice(0,4)+' '+x.slice(4);});}
+function windrichting(k){return ['N','NO','O','ZO','Z','ZW','W','NW'][Math.round(k/45)%8];}
+function controleerHandtekening(pub,sig,u){return crypto.subtle.importKey('raw',pub,{name:'ECDSA',namedCurve:'P-256'},false,['verify']).then(function(k){return crypto.subtle.verify({name:'ECDSA',hash:'SHA-256'},k,sig,u);}).catch(function(){return false;});}
+function beeldHash(bron,x,y,w,h){
+  var c=document.createElement('canvas');c.width=17;c.height=16;var g=c.getContext('2d');g.imageSmoothingQuality='high';
+  // eerst verkleinen in twee stappen voor een stabiel resultaat
+  var t=document.createElement('canvas');t.width=136;t.height=128;var tg=t.getContext('2d');tg.imageSmoothingQuality='high';tg.drawImage(bron,x,y,w,h,0,0,136,128);
+  g.drawImage(t,0,0,17,16);var d=g.getImageData(0,0,17,16).data;
+  var grijs=[];for(var i=0;i<17*16;i++)grijs.push(d[i*4]*0.299+d[i*4+1]*0.587+d[i*4+2]*0.114);
+  var bits=new Uint8Array(64),n=0,som=0,blok=[];
+  for(var r=0;r<16;r++)for(var k=0;k<16;k++){if(grijs[r*17+k]<grijs[r*17+k+1])bits[n>>3]|=1<<(7-(n&7));n++;}
+  for(r=0;r<16;r++)for(k=0;k<16;k++){blok.push(grijs[r*17+k]);som+=grijs[r*17+k];}
+  var gem=som/256;for(i=0;i<256;i++){if(blok[i]>gem)bits[32+(i>>3)]|=1<<(7-(i&7));}
+  return bits;
+}
+function afstandBits(a,b){var n=0;for(var i=0;i<a.length;i++){var x=a[i]^b[i];while(x){n+=x&1;x>>=1;}}return n;}
+function leesStempel(b){
+  if(b.length<2+1+8+1+8+2+1+2+1+8+64+4+65+64||b[0]!==MAGIC[0]||b[1]!==MAGIC[1]||b[2]!==1)return null;
+  var v=new DataView(b.buffer,b.byteOffset,b.length),o=3,m={};
+  m.t=v.getFloat64(o);o+=8;m.satTijd=b[o++]===1;
+  m.lat=v.getInt32(o)/1e7;o+=4;m.lon=v.getInt32(o)/1e7;o+=4;
+  var a=v.getUint16(o);o+=2;m.acc=a===65535?null:a/10;m.sats=b[o++];
+  var k=v.getUint16(o);o+=2;m.kop=k===65535?null:k;m.helling=v.getInt8(o);o+=1;
+  m.sensor=b.slice(o,o+8);o+=8;m.hash=b.slice(o,o+64);o+=64;m.w=v.getUint16(o);o+=2;m.h=v.getUint16(o);o+=2;
+  m.pub=b.slice(o,o+65);o+=65;m.sig=b.slice(o,o+64);m.getekend=b.slice(0,o);
+  if(m.lat===0&&m.lon===0)m.lat=m.lon=null;
+  return m;
+}
+function zoekSegment(jpg){
+  if(jpg[0]!==0xFF||jpg[1]!==0xD8)return null;var o=2;
+  while(o+4<jpg.length&&jpg[o]===0xFF){var mk=jpg[o+1],len=(jpg[o+2]<<8)|jpg[o+3];
+    if(mk===0xDA)break;
+    if(mk===0xEF&&gelijk(jpg.slice(o+4,o+4+SEG_ID.length),SEG_ID)){return{inhoud:jpg.slice(o+4+SEG_ID.length,o+2+len),zonder:samen([jpg.slice(0,o),jpg.slice(o+2+len)])};}
+    o+=2+len;}
+  return null;
+}
+function laadBeeld(u8){return new Promise(function(ok,nok){var img=new Image();img.onload=function(){ok(img)};img.onerror=function(){nok(new Error('geen afbeelding'))};img.src=URL.createObjectURL(new Blob([u8],{type:'image/jpeg'}));});}
+function controleer(u8){
+  var r={bestand:null,stempel:null,url:URL.createObjectURL(new Blob([u8],{type:'image/jpeg'}))};
+  var seg=zoekSegment(u8);
+  var p1=seg?sha(seg.zonder).then(function(h){var hh=seg.inhoud.slice(0,32),sig=seg.inhoud.slice(32,96),pub=seg.inhoud.slice(96,161);
+      if(!gelijk(h,hh)){r.bestand={ok:false,reden:'bestand gewijzigd'};return;}
+      return controleerHandtekening(pub,sig,samen([TE.encode('bestand'),hh])).then(function(ok){r.bestand={ok:ok,pub:pub,reden:ok?'':'handtekening klopt niet'};});}):Promise.resolve();
+  return p1.then(function(){return laadBeeld(u8);}).then(function(img){
+    var c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;var g=c.getContext('2d');g.drawImage(img,0,0);
+    // QR zoeken in het onderste deel
+    var y0=Math.floor(c.height*0.55),d=g.getImageData(0,y0,c.width,c.height-y0);
+    var q=jsQR(d.data,d.width,d.height,{inversionAttempts:'dontInvert'});
+    if(!q){var s2=Math.min(1,1400/c.width);if(s2<1){var c2=document.createElement('canvas');c2.width=Math.round(c.width*s2);c2.height=Math.round((c.height-y0)*s2);c2.getContext('2d').drawImage(c,0,y0,c.width,c.height-y0,0,0,c2.width,c2.height);var d2=c2.getContext('2d').getImageData(0,0,c2.width,c2.height);q=jsQR(d2.data,d2.width,d2.height);}}
+    if(!q)return r;
+    var m=leesStempel(qrBytes(q));if(!m){r.stempel={ok:false,reden:'onbekende QR code'};return r;}
+    return controleerHandtekening(m.pub,m.sig,m.getekend).then(function(ok){
+      m.ok=ok;r.stempel=m;if(!ok)return r;
+      var schaal=c.width/m.w,fh=Math.round(m.h*schaal);
+      var nu=beeldHash(c,0,0,c.width,Math.min(fh,c.height));m.afstand=afstandBits(nu,m.hash);
+      return codeVan(m.pub).then(function(code){m.code=code;return r;});
+    });
+  });
+}
+function oordeel(r){
+  var s=r.stempel,b=r.bestand;
+  if(!s&&!b)return ['o-grijs','Geen Echt Foto','Er is geen stempel en geen handtekening van Echt Foto gevonden. Dat zegt niets over of de foto echt of nep is, alleen dat hij niet met deze app is gemaakt (of dat het stempel is weggeknipt).'];
+  if(s&&!s.ok)return ['o-rood','Stempel ongeldig','De QR code lijkt op een Echt Foto stempel, maar de handtekening klopt niet. Mogelijk is het stempel nagemaakt of aangepast.'];
+  if(!s&&b&&b.ok)return ['o-geel','Handtekening gevonden, stempel onleesbaar','Het bestand is ondertekend en onveranderd, maar de stempelbalk is weggeknipt of onleesbaar.'];
+  if(b&&b.ok&&s&&s.ok&&gelijk(b.pub,s.pub))return ['o-groen','Origineel en onbewerkt','Dit is het originele bestand zoals de camera van Echt Foto het maakte. Er is geen pixel veranderd sinds het ondertekenen.'];
+  if(b&&!b.ok&&s&&s.ok&&s.afstand<=24)return ['o-geel','Bestand aangepast','Het stempel is echt en het beeld lijkt op het origineel, maar het bestand is na het ondertekenen veranderd ('+b.reden+'). Vraag om het originele bestand.'];
+  if(s&&s.ok){
+    if(s.afstand<=24)return ['o-groen','Echt, opnieuw opgeslagen','Het stempel is echt en het beeld komt overeen met wat de camera vastlegde (verschil '+s.afstand+' van 512). Het bestand is wel opnieuw opgeslagen of verkleind, bijvoorbeeld door WhatsApp. Kleine bewerkingen zijn op deze manier niet helemaal uit te sluiten.'];
+    if(s.afstand<=60)return ['o-geel','Twijfel','Het stempel is echt, maar het beeld wijkt deels af (verschil '+s.afstand+' van 512). Mogelijk bijgesneden, gefilterd of bewerkt. Vraag om het originele bestand.'];
+    return ['o-rood','Bewerkt of andere foto','Het stempel is echt, maar het beeld past er niet bij (verschil '+s.afstand+' van 512). De foto is bewerkt of het stempel is op een andere foto geplakt.'];
+  }
+  return ['o-rood','Gewijzigd','Het bestand is na het ondertekenen veranderd.'];
+}
+function rijen(m){
+  var t='';
+  t+='<tr><td>Tijdstip</td><td>'+esc(tijdTekst(m.t))+'<br><span class="klein">'+(m.satTijd?'satellietklok (betrouwbaar)':'telefoonklok (niet onafhankelijk)')+'</span></td></tr>';
+  t+='<tr><td>Plek</td><td>'+(m.lat!=null?esc(m.lat.toFixed(6)+', '+m.lon.toFixed(6))+'<br><span class="klein">± '+Math.round(m.acc)+' m'+(m.sats?', '+m.sats+' satellieten':'')+'</span>':'geen positie')+'</td></tr>';
+  t+='<tr><td>Kijkrichting</td><td>'+(m.kop!=null?Math.round(m.kop)+'° '+windrichting(m.kop)+', helling '+m.helling+'°':'geen kompas')+'</td></tr>';
+  t+='<tr><td>Toestelcode</td><td>'+esc(m.code||'')+'</td></tr>';
+  t+='<tr><td>Sensors</td><td>vingerafdruk '+hex(m.sensor).toUpperCase()+'</td></tr>';
+  t+='<tr><td>Formaat</td><td>'+m.w+' × '+m.h+' pixels</td></tr>';
+  return t;
+}
+function toonStempel(m){
+  $('details').style.display='block';$('tabel').innerHTML=rijen(m);
+  if(m.lat!=null){var k=$('kaart');k.style.display='block';k.href='https://www.openstreetmap.org/?mlat='+m.lat+'&mlon='+m.lon+'#map=18/'+m.lat+'/'+m.lon;}
+}
+var stempel=null;
+function start(){
+  var h=location.hash.slice(1);
+  if(!h){$('oordeel').innerHTML='<div class="oordeel o-grijs"><b>Kies een foto</b>Scan de QR code op een Echt Foto, of kies hieronder een fotobestand om te controleren.</div>';return;}
+  var m=null;try{m=leesStempel(unb64url(h));}catch(e){}
+  if(!m){$('oordeel').innerHTML='<div class="oordeel o-rood"><b>Onleesbare code</b>Deze link bevat geen geldig Echt Foto stempel.</div>';return;}
+  controleerHandtekening(m.pub,m.sig,m.getekend).then(function(ok){
+    if(!ok){$('oordeel').innerHTML='<div class="oordeel o-rood"><b>Stempel ongeldig</b>De handtekening klopt niet. Dit stempel is aangepast of nagemaakt.</div>';return;}
+    return codeVan(m.pub).then(function(c){m.code=c;stempel=m;
+      $('oordeel').innerHTML='<div class="oordeel o-groen"><b>Stempel echt</b>Deze gegevens zijn ondertekend door de app Echt Foto en sindsdien niet veranderd. Kies hieronder de foto zelf om te controleren of het beeld erbij hoort.</div>';
+      toonStempel(m);});
+  });
+}
+$('bestand').onchange=function(){var f=this.files&&this.files[0];if(!f)return;
+  $('fotoOordeel').innerHTML='<div class="oordeel o-grijs"><b>Bezig...</b></div>';
+  f.arrayBuffer().then(function(b){return controleer(new Uint8Array(b));}).then(function(r){
+    var o=oordeel(r);var extra='';
+    if(stempel&&r.stempel&&r.stempel.ok&&!gelijk(stempel.getekend,r.stempel.getekend))extra='<br><br><b style="font-size:15px">Let op:</b> deze foto hoort bij een ander stempel dan de gescande QR code.';
+    $('fotoOordeel').innerHTML='<div class="oordeel '+o[0]+'"><b>'+esc(o[1])+'</b>'+esc(o[2])+extra+'</div>';
+    $('foto').src=r.url;$('foto').style.display='block';
+    if(r.stempel&&r.stempel.ok&&!stempel){toonStempel(r.stempel);}
+  }).catch(function(e){$('fotoOordeel').innerHTML='<div class="oordeel o-rood"><b>Kan dit bestand niet lezen</b>'+esc(e.message)+'</div>';});
+};
+window.addEventListener('hashchange',start);start();
+})();
+</script>
+</body>
+</html>
